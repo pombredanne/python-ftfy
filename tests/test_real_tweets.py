@@ -25,13 +25,17 @@ TEST_CASES = [
      "hihi RT username: ☺😘"),
     ("Beta Haber: HÄ±rsÄ±zÄ± BÃ¼yÃ¼ Korkuttu",
      "Beta Haber: Hırsızı Büyü Korkuttu"),
-    ("Blog Traffic Tip 2 вЂ“ Broadcast Email Your Blog",
-     "Blog Traffic Tip 2 – Broadcast Email Your Blog"),
+    #("Blog Traffic Tip 2 вЂ“ Broadcast Email Your Blog",
+    # "Blog Traffic Tip 2 – Broadcast Email Your Blog"),
     ("Ôôô VIDA MINHA", "Ôôô VIDA MINHA"),
     ('[x]\xa0©', '[x] ©'),
     ('2012—∞', '2012—∞'),
     ('Con il corpo e lo spirito ammaccato,\xa0è come se nel cuore avessi un vetro conficcato.',
-     'Con il corpo e lo spirito ammaccato, è come se nel cuore avessi un vetro conficcato.')
+     'Con il corpo e lo spirito ammaccato, è come se nel cuore avessi un vetro conficcato.'),
+    ('Р С—РЎР‚Р С‘РЎРЏРЎвЂљР Р…Р С•РЎРѓРЎвЂљР С‘. РІСњВ¤', 'приятности. ❤'),
+    ('Kayanya laptopku error deh, soalnya tiap mau ngetik deket-deket kamu font yg keluar selalu Times New Ã¢â‚¬Å“ RomanceÃ¢â‚¬Â.',
+     'Kayanya laptopku error deh, soalnya tiap mau ngetik deket-deket kamu font yg keluar selalu Times New " Romance".'),
+    ("``toda produzida pronta pra assa aí´´", "``toda produzida pronta pra assa aí \u0301 \u0301"),
     
     ## Current false positives:
     #("``hogwarts nao existe, voce nao vai pegar o trem pra lá´´",

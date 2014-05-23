@@ -7,16 +7,21 @@ for more information.
 """
 
 from __future__ import unicode_literals
+
+# See the docstring for ftfy.bad_codecs to see what we're doing here.
+import ftfy.bad_codecs
+ftfy.bad_codecs.ok()
+
 from ftfy import fixes
 from ftfy.fixes import fix_text_encoding
-from ftfy.compatibility import PYTHON34_OR_LATER
+from ftfy.compatibility import PYTHON34_OR_LATER, is_printable
 import unicodedata
 import warnings
 
 
 def fix_text(text,
              remove_unsafe_private_use=(not PYTHON34_OR_LATER),
-             fix_entities=True,
+             fix_entities='auto',
              remove_terminal_escapes=True,
              fix_encoding=True,
              normalization='NFKC',
@@ -47,8 +52,8 @@ def fix_text(text,
         ...               'doo&#133;\033[0m'))
         I'm blue, da ba dee da ba doo...
 
-        >>> # This example string starts with a byte-order mark, even if you can't
-        >>> # see it on the Web.
+        >>> # This example string starts with a byte-order mark, even if
+        >>> # you can't see it on the Web.
         >>> print(fix_text('\ufeffParty like\nit&rsquo;s 1999!'))
         Party like
         it's 1999!
@@ -61,13 +66,15 @@ def fix_text(text,
 
     Based on the options you provide, ftfy applies these steps in order:
 
-    - If `remove_unsafe_private_use` is True, it removes a range of unassigned
-      characters that could trigger Python `bug 18183`_. This will default
-      to False starting on Python 3.4, when the bugfix will be released.
-    - If `fix_entities` is True, consider replacing HTML entities with their
-      equivalent characters. However, this never applies to text with a pair
-      of angle brackets in it already; you're probably not supposed to decode
-      entities there, and you'd make things ambiguous if you did.
+    - If `remove_unsafe_private_use` is True, it removes a range of private-use
+      characters that could trigger a Python bug. The bug is fixed in
+      the most recent versions of Python, so this will default to False
+      starting on Python 3.4.
+    - If `fix_entities` is True, replace HTML entities with their equivalent
+      characters. If it's "auto" (the default), then consider replacing HTML
+      entities, but don't do so in text where you have seen a pair of actual
+      angle brackets (that's probably actually HTML and you shouldn't mess
+      with the entities).
     - If `remove_terminal_escapes` is True, remove sequences of bytes that are
       instructions for Unix terminals, such as the codes that make text appear
       in different colors.
@@ -107,7 +114,7 @@ def fix_text(text,
     If you are certain your entire text is in the same encoding (though that
     encoding is possibly flawed), and do not mind performing operations on
     the whole text at once, use `fix_text_segment`.
-      
+
     _`bug 18183`: http://bugs.python.org/issue18183
     """
     if isinstance(text, bytes):
@@ -125,7 +132,7 @@ def fix_text(text,
 
         substring = text[pos:textbreak]
 
-        if '<' in substring and '>' in substring:
+        if fix_entities == 'auto' and '<' in substring and '>' in substring:
             # we see angle brackets together; this could be HTML
             fix_entities = False
 
@@ -150,31 +157,49 @@ def fix_text(text,
 ftfy = fix_text
 
 
-def fix_file(input_file, normalization='NFKC'):
+def fix_file(input_file,
+             remove_unsafe_private_use=True,
+             fix_entities='auto',
+             remove_terminal_escapes=True,
+             fix_encoding=True,
+             normalization='NFKC',
+             uncurl_quotes=True,
+             fix_line_breaks=True,
+             remove_control_chars=True,
+             remove_bom=True):
     """
     Fix text that is found in a file.
 
     If the file is being read as Unicode text, use that. If it's being read as
-    bytes, then we'll try to decode each line as Latin-1, and then fix it if it
-    was really UTF-8 or something.
-
-    That's kind of awful, but it will have to suffice until we have a working
-    encoding detector.
+    bytes, then unfortunately, we have to guess what encoding it is. We'll try
+    a few common encodings, but we make no promises. See `guess_bytes.py` for
+    how this is done.
 
     The output is a stream of fixed lines of text.
     """
-    entities = True
+    entities = fix_entities
     for line in input_file:
         if isinstance(line, bytes):
-            line = line.decode('latin-1')
-        if '<' in line and '>' in line:
+            line, encoding = guess_bytes(line)
+        if fix_entities == 'auto' and '<' in line and '>' in line:
             entities = False
-        yield fix_text_segment(line, normalization, entities)
+        yield fix_text_segment(
+            line,
+            remove_unsafe_private_use=remove_unsafe_private_use,
+            fix_entities=fix_entities,
+            remove_terminal_escapes=remove_terminal_escapes,
+            fix_encoding=entities,
+            normalization=normalization,
+            uncurl_quotes=uncurl_quotes,
+            fix_line_breaks=fix_line_breaks,
+            remove_control_chars=remove_control_chars,
+            remove_bom=remove_bom
+        )
 
 
 def fix_text_segment(text,
                      remove_unsafe_private_use=True,
-                     fix_entities=True,
+                     fix_entities='auto',
                      remove_terminal_escapes=True,
                      fix_encoding=True,
                      normalization='NFKC',
@@ -192,12 +217,13 @@ def fix_text_segment(text,
     if isinstance(text, bytes):
         raise UnicodeError(fixes.BYTES_ERROR_TEXT)
 
-    unsafe_entities = ('<' in text and '>' in text)
+    if fix_entities == 'auto' and '<' in text and '>' in text:
+        fix_entities = False
     while True:
         origtext = text
         if remove_unsafe_private_use:
             text = fixes.remove_unsafe_private_use(text)
-        if fix_entities and not unsafe_entities:
+        if fix_entities:
             text = fixes.unescape_html(text)
         if remove_terminal_escapes:
             text = fixes.remove_terminal_escapes(text)
@@ -217,6 +243,66 @@ def fix_text_segment(text,
             return text
 
 
+def guess_bytes(bstring):
+    """
+    If you have some bytes in an unknown encoding, here's a reasonable
+    strategy for decoding them, by trying a few common encodings that
+    can be distinguished from each other.
+
+    This is not a magic bullet. If the bytes are coming from some MySQL
+    database with the "character set" set to ISO Elbonian, this won't figure
+    it out.
+
+    The encodings we try are:
+
+    - UTF-16 with a byte order mark, because a UTF-16 byte order mark looks
+      like nothing else
+    - UTF-8, because it's the global de facto standard
+    - "utf-8-variants", because it's what people actually implement when they
+      think they're doing UTF-8
+    - MacRoman, because Microsoft Office thinks it's still a thing, and it
+      can be distinguished by its line breaks. (If there are no line breaks in
+      the string, though, you're out of luck.)
+    - "sloppy-windows-1252", the Latin-1-like encoding that is the most common
+      single-byte encoding
+    """
+    if bstring.startswith(b'\xfe\xff') or bstring.startswith(b'\xff\xfe'):
+        return bstring.decode('utf-16'), 'utf-16'
+
+    byteset = set(bytes(bstring))
+    byte_ed, byte_c0, byte_CR, byte_LF = b'\xed\xc0\r\n'
+
+    try:
+        if byte_ed in byteset or byte_c0 in byteset:
+            return bstring.decode('utf-8-variants'), 'utf-8-variants'
+        else:
+            return bstring.decode('utf-8'), 'utf-8'
+    except UnicodeDecodeError:
+        pass
+
+    if byte_CR in bstring and byte_LF not in bstring:
+        return bstring.decode('macroman'), 'macroman'
+    else:
+        return bstring.decode('sloppy-windows-1252'), 'sloppy-windows-1252'
+
+
+def explain_unicode(text):
+    """
+    A utility method that's useful for debugging mysterious Unicode.
+    """
+    for char in text:
+        if is_printable(char):
+            display = char
+        else:
+            display = char.encode('unicode-escape').decode('ascii')
+        print('U+{code:04X}  {display:<7} [{category}] {name}'.format(
+            display=display,
+            code=ord(char),
+            category=unicodedata.category(char),
+            name=unicodedata.name(char, '<unknown>')
+        ))
+
+
 def fix_bad_encoding(text):
     """
     Kept for compatibility with previous versions of ftfy.
@@ -226,4 +312,3 @@ def fix_bad_encoding(text):
         DeprecationWarning
     )
     return fix_text_encoding(text)
-

@@ -37,28 +37,38 @@ if sys.hexversion >= 0x03000000:
 #   = Whitespace
 # o = Other
 
-def make_char_data_file():
+
+def make_char_data_file(do_it_anyway=False):
     """
     Build the compressed data file 'char_classes.dat' and write it to the
     current directory.
 
     If you run this, run it in Python 3.3 or later. It will run in earlier
     versions, but you won't get the current Unicode standard, leading to
-    inconsistent behavior.
+    inconsistent behavior. To protect against this, running this in the
+    wrong version of Python will raise an error unless you pass
+    `do_it_anyway=True`.
     """
+    if sys.hexversion < 0x03030000 and not do_it_anyway:
+        raise RuntimeError(
+            "This function should be run in Python 3.3 or later."
+        )
+
     cclasses = [None] * 0x110000
     for codepoint in range(0x0, 0x110000):
         char = unichr(codepoint)
         category = unicodedata.category(char)
 
         if category.startswith('L'):  # letters
-            if unicodedata.name(char).startswith('LATIN')\
-            and codepoint < 0x200:
+            if (
+                unicodedata.name(char).startswith('LATIN')
+                and codepoint < 0x20
+            ):
                 if category == 'Lu':
                     cclasses[codepoint] = 'L'
                 else:
                     cclasses[codepoint] = 'l'
-            else: # non-Latin letter, or close enough
+            else:  # non-Latin letter, or close enough
                 if category == 'Lu' or category == 'Lt':
                     cclasses[codepoint] = 'A'
                 elif category == 'Ll':
@@ -101,4 +111,3 @@ def make_char_data_file():
 
 if __name__ == '__main__':
     make_char_data_file()
-

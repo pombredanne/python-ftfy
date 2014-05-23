@@ -2,14 +2,14 @@ from setuptools import setup
 
 setup(
     name="ftfy",
-    version='3.0.2',
-    maintainer='Luminoso, LLC',
+    version='3.1.3',
+    maintainer='Luminoso Technologies, Inc.',
     maintainer_email='dev@lumino.so',
     license="MIT",
     url='http://github.com/LuminosoInsight/python-ftfy',
     platforms=["any"],
     description="Fixes some problems with Unicode text after the fact",
-    packages=['ftfy'],
+    packages=['ftfy', 'ftfy.bad_codecs'],
     package_data={'ftfy': ['char_classes.dat']},
     classifiers=[
         "Programming Language :: Python :: 2",
@@ -18,6 +18,7 @@ setup(
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.2",
         "Programming Language :: Python :: 3.3",
+        "Programming Language :: Python :: 3.4",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Topic :: Software Development :: Libraries :: Python Modules",
