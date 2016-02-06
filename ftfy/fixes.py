@@ -5,12 +5,16 @@ can perform.
 """
 
 from __future__ import unicode_literals
-from ftfy.chardata import (possible_encoding,
-                           CHARMAP_ENCODINGS, CONTROL_CHARS)
+from ftfy.chardata import (possible_encoding, CHARMAP_ENCODINGS,
+                           CONTROL_CHARS, LIGATURES, WIDTH_MAP,
+                           PARTIAL_UTF8_PUNCT_RE, ALTERED_UTF8_RE,
+                           LOSSY_UTF8_RE, SINGLE_QUOTE_RE, DOUBLE_QUOTE_RE)
 from ftfy.badness import text_cost
-from ftfy.compatibility import (htmlentitydefs, unichr, UNSAFE_PRIVATE_USE_RE)
+from ftfy.compatibility import htmlentitydefs, unichr
 import re
 import sys
+import codecs
+import warnings
 
 
 BYTES_ERROR_TEXT = """Hey wait, this isn't Unicode.
@@ -34,45 +38,33 @@ If you're confused by this, please read the Python Unicode HOWTO:
 """ % sys.version_info[0]
 
 
-def fix_text_encoding(text):
+def fix_encoding(text):
     r"""
     Fix text with incorrectly-decoded garbage ("mojibake") whenever possible.
 
-    Something you will find all over the place, in real-world text, is text
-    that's mistakenly encoded as utf-8, decoded in some ugly format like
-    latin-1 or even Windows codepage 1252, and encoded as utf-8 again.
-
-    This causes your perfectly good Unicode-aware code to end up with garbage
-    text because someone else (or maybe "someone else") made a mistake.
-
-    This function looks for the evidence of that having happened and fixes it.
-    It determines whether it should replace nonsense sequences of single-byte
-    characters that were really meant to be UTF-8 characters, and if so, turns
-    them into the correctly-encoded Unicode character that they were meant to
-    represent.
+    This function looks for the evidence of mojibake, formulates a plan to fix
+    it, and applies the plan.  It determines whether it should replace nonsense
+    sequences of single-byte characters that were really meant to be UTF-8
+    characters, and if so, turns them into the correctly-encoded Unicode
+    character that they were meant to represent.
 
     The input to the function must be Unicode. If you don't have Unicode text,
     you're not using the right tool to solve your problem.
 
-    .. note::
-        The following examples are written using unmarked literal strings,
-        but they are Unicode text. In Python 2 we have "unicode_literals"
-        turned on, and in Python 3 this is always the case.
+    `fix_encoding` decodes text that looks like it was decoded incorrectly. It
+    leaves alone text that doesn't.
 
-    ftfy decodes text that looks like it was decoded incorrectly. It leaves
-    alone text that doesn't.
-
-        >>> print(fix_text_encoding('Ãºnico'))
+        >>> print(fix_encoding('Ãºnico'))
         único
 
-        >>> print(fix_text_encoding('This text is fine already :þ'))
+        >>> print(fix_encoding('This text is fine already :þ'))
         This text is fine already :þ
 
     Because these characters often come from Microsoft products, we allow
     for the possibility that we get not just Unicode characters 128-255, but
     also Windows's conflicting idea of what characters 128-160 are.
 
-        >>> print(fix_text_encoding('This â€” should be an em dash'))
+        >>> print(fix_encoding('This â€” should be an em dash'))
         This — should be an em dash
 
     We might have to deal with both Windows characters and raw control
@@ -80,33 +72,62 @@ def fix_text_encoding(text):
     0x81 that have no mapping in Windows. This is a string that Python's
     standard `.encode` and `.decode` methods cannot correct.
 
-        >>> print(fix_text_encoding('This text is sad .â\x81”.'))
+        >>> print(fix_encoding('This text is sad .â\x81”.'))
         This text is sad .⁔.
 
     However, it has safeguards against fixing sequences of letters and
-    punctuation that can occur in valid text:
+    punctuation that can occur in valid text. In the following example,
+    the last three characters are not replaced with a Korean character,
+    even though they could be.
 
-        >>> print(fix_text_encoding('not such a fan of Charlotte Brontë…”'))
+        >>> print(fix_encoding('not such a fan of Charlotte Brontë…”'))
         not such a fan of Charlotte Brontë…”
+
+    This function can now recover some complex manglings of text, such as when
+    UTF-8 mojibake has been normalized in a way that replaces U+A0 with a
+    space:
+
+        >>> print(fix_encoding('The more you know ðŸŒ '))
+        The more you know 🌠
 
     Cases of genuine ambiguity can sometimes be addressed by finding other
     characters that are not double-encoded, and expecting the encoding to
     be consistent:
 
-        >>> print(fix_text_encoding('AHÅ™, the new sofa from IKEA®'))
+        >>> print(fix_encoding('AHÅ™, the new sofa from IKEA®'))
         AHÅ™, the new sofa from IKEA®
 
     Finally, we handle the case where the text is in a single-byte encoding
     that was intended as Windows-1252 all along but read as Latin-1:
 
-        >>> print(fix_text_encoding('This text was never UTF-8 at all\x85'))
+        >>> print(fix_encoding('This text was never UTF-8 at all\x85'))
         This text was never UTF-8 at all…
 
     The best version of the text is found using
     :func:`ftfy.badness.text_cost`.
     """
-    text, plan = fix_encoding_and_explain(text)
+    text, _ = fix_encoding_and_explain(text)
     return text
+
+
+def fix_text_encoding(text):
+    """
+    A deprecated name for :func:`ftfy.fixes.fix_encoding`.
+    """
+    warnings.warn('fix_text_encoding is now known as fix_encoding',
+                  DeprecationWarning)
+    return fix_encoding(text)
+
+
+# When we support discovering mojibake in more encodings, we run the risk
+# of more false positives. We can mitigate false positives by assigning an
+# additional cost to using encodings that are rarer than Windows-1252, so
+# that these encodings will only be used if they fix multiple problems.
+ENCODING_COSTS = {
+    'macroman': 2,
+    'cp437': 3,
+    'sloppy-windows-1251': 5
+}
 
 
 def fix_encoding_and_explain(text):
@@ -114,8 +135,8 @@ def fix_encoding_and_explain(text):
     Re-decodes text that has been decoded incorrectly, and also return a
     "plan" indicating all the steps required to fix it.
 
-    To fix similar text in the same way, without having to detect anything,
-    you can use the ``apply_plan`` function.
+    The resulting plan could be used with :func:`ftfy.fixes.apply_plan`
+    to fix additional strings that are broken in the same way.
     """
     best_version = text
     best_cost = text_cost(text)
@@ -126,17 +147,8 @@ def fix_encoding_and_explain(text):
         text, plan = fix_one_step_and_explain(text)
         plan_so_far.extend(plan)
         cost = text_cost(text)
-
-        # Add a penalty if we used a particularly obsolete encoding. The result
-        # is that we won't use these encodings unless they can successfully
-        # replace multiple characters.
-        if ('encode', 'macroman') in plan_so_far or\
-           ('encode', 'cp437') in plan_so_far:
-            cost += 2
-
-        # We need pretty solid evidence to decode from Windows-1251 (Cyrillic).
-        if ('encode', 'sloppy-windows-1251') in plan_so_far:
-            cost += 5
+        for _, _, step_cost in plan_so_far:
+            cost += step_cost
 
         if cost < best_cost:
             best_cost = cost
@@ -150,8 +162,7 @@ def fix_one_step_and_explain(text):
     """
     Performs a single step of re-decoding text that's been decoded incorrectly.
 
-    Returns the decoded text, plus a "plan" for how to reproduce what it
-    did.
+    Returns the decoded text, plus a "plan" for how to reproduce what it did.
     """
     if isinstance(text, bytes):
         raise UnicodeError(BYTES_ERROR_TEXT)
@@ -173,18 +184,42 @@ def fix_one_step_and_explain(text):
     for encoding in CHARMAP_ENCODINGS:
         if possible_encoding(text, encoding):
             encoded_bytes = text.encode(encoding)
+            encode_step = ('encode', encoding, ENCODING_COSTS.get(encoding, 0))
+            transcode_steps = []
 
             # Now, find out if it's UTF-8 (or close enough). Otherwise,
             # remember the encoding for later.
             try:
                 decoding = 'utf-8'
+                # Check encoded_bytes for sequences that would be UTF-8,
+                # except they have b' ' where b'\xa0' would belong.
+                if ALTERED_UTF8_RE.search(encoded_bytes):
+                    encoded_bytes = restore_byte_a0(encoded_bytes)
+                    cost = encoded_bytes.count(b'\xa0') * 2
+                    transcode_steps.append(('transcode', 'restore_byte_a0', cost))
+
+                # Check for the byte 0x1a, which indicates where one of our
+                # 'sloppy' codecs found a replacement character.
+                if encoding.startswith('sloppy') and b'\x1a' in encoded_bytes:
+                    encoded_bytes = replace_lossy_sequences(encoded_bytes)
+                    transcode_steps.append(('transcode', 'replace_lossy_sequences', 0))
+
                 if b'\xed' in encoded_bytes or b'\xc0' in encoded_bytes:
                     decoding = 'utf-8-variants'
+
+                decode_step = ('decode', decoding, 0)
+                steps = [encode_step] + transcode_steps + [decode_step]
                 fixed = encoded_bytes.decode(decoding)
-                steps = [('encode', encoding), ('decode', decoding)]
                 return fixed, steps
+
             except UnicodeDecodeError:
                 possible_1byte_encodings.append(encoding)
+
+    # Look for a-hat-euro sequences that remain, and fix them in isolation.
+    if PARTIAL_UTF8_PUNCT_RE.search(text):
+        steps = [('transcode', 'fix_partial_utf8_punct_in_1252', 1)]
+        fixed = fix_partial_utf8_punct_in_1252(text)
+        return fixed, steps
 
     # The next most likely case is that this is Latin-1 that was intended to
     # be read as Windows-1252, because those two encodings in particular are
@@ -205,7 +240,8 @@ def fix_one_step_and_explain(text):
                 fixed = encoded.decode('windows-1252')
                 steps = []
                 if fixed != text:
-                    steps = [('encode', 'latin-1'), ('decode', 'windows-1252')]
+                    steps = [('encode', 'latin-1', 0),
+                             ('decode', 'windows-1252', 1)]
                 return fixed, steps
             except UnicodeDecodeError:
                 # This text contained characters that don't even make sense
@@ -216,9 +252,8 @@ def fix_one_step_and_explain(text):
     # The cases that remain are mixups between two different single-byte
     # encodings, and not the common case of Latin-1 vs. Windows-1252.
     #
-    # Those cases are somewhat rare, and impossible to solve without false
-    # positives. If you're in one of these situations, you should try using
-    # the `ftfy.guess_bytes` function.
+    # These cases may be unsolvable without adding false positives, though
+    # I have vague ideas about how to optionally address them in the future.
 
     # Return the text unchanged; the plan is empty.
     return text, []
@@ -228,20 +263,27 @@ def apply_plan(text, plan):
     """
     Apply a plan for fixing the encoding of text.
 
-    The plan is a list of tuples of the form (operation, encoding), where
-    `operation` is either 'encode' or 'decode', and `encoding` is an encoding
-    name such as 'utf-8' or 'latin-1'.
+    The plan is a list of tuples of the form (operation, encoding, cost):
 
-    Because only text can be encoded, and only bytes can be decoded, the plan
-    should alternate 'encode' and 'decode' steps, or else this function will
-    encounter an error.
+    - `operation` is 'encode' if it turns a string into bytes, 'decode' if it
+      turns bytes into a string, and 'transcode' if it keeps the type the same.
+    - `encoding` is the name of the encoding to use, such as 'utf-8' or
+      'latin-1', or the function name in the case of 'transcode'.
+    - The `cost` does not affect how the plan itself works. It's used by other
+      users of plans, namely `fix_encoding_and_explain`, which has to decide
+      *which* plan to use.
     """
     obj = text
-    for operation, encoding in plan:
+    for operation, encoding, _ in plan:
         if operation == 'encode':
             obj = obj.encode(encoding)
         elif operation == 'decode':
             obj = obj.decode(encoding)
+        elif operation == 'transcode':
+            if encoding in TRANSCODERS:
+                obj = TRANSCODERS[encoding](obj)
+            else:
+                raise ValueError("Unknown transcode operation: %s" % encoding)
         else:
             raise ValueError("Unknown plan step: %s" % operation)
 
@@ -302,9 +344,6 @@ def remove_terminal_escapes(text):
     return ANSI_RE.sub('', text)
 
 
-SINGLE_QUOTE_RE = re.compile('[\u2018-\u201b]')
-DOUBLE_QUOTE_RE = re.compile('[\u201c-\u201f]')
-
 def uncurl_quotes(text):
     r"""
     Replace curly quotation marks with straight equivalents.
@@ -315,19 +354,135 @@ def uncurl_quotes(text):
     return SINGLE_QUOTE_RE.sub("'", DOUBLE_QUOTE_RE.sub('"', text))
 
 
+def fix_latin_ligatures(text):
+    """
+    Replace single-character ligatures of Latin letters, such as 'ﬁ', with the
+    characters that they contain, as in 'fi'. Latin ligatures are usually not
+    intended in text strings (though they're lovely in *rendered* text).  If
+    you have such a ligature in your string, it is probably a result of a
+    copy-and-paste glitch.
+
+    We leave ligatures in other scripts alone to be safe. They may be intended,
+    and removing them may lose information. If you want to take apart nearly
+    all ligatures, use NFKC normalization.
+
+        >>> print(fix_latin_ligatures("ﬂuﬃeﬆ"))
+        fluffiest
+    """
+    return text.translate(LIGATURES)
+
+
+def fix_character_width(text):
+    """
+    The ASCII characters, katakana, and Hangul characters have alternate
+    "halfwidth" or "fullwidth" forms that help text line up in a grid.
+
+    If you don't need these width properties, you probably want to replace
+    these characters with their standard form, which is what this function
+    does.
+
+    Note that this replaces the ideographic space, U+3000, with the ASCII
+    space, U+20.
+
+        >>> print(fix_character_width("ＬＯＵＤ　ＮＯＩＳＥＳ"))
+        LOUD NOISES
+        >>> print(fix_character_width("Ｕﾀｰﾝ"))   # this means "U-turn"
+        Uターン
+    """
+    return text.translate(WIDTH_MAP)
+
+
 def fix_line_breaks(text):
     r"""
-    Convert line breaks to Unix style.
+    Convert all line breaks to Unix style.
 
-    In particular, this replaces CRLF (\\r\\n) with LF (\\n), then
-    additionally replaces CR (\\r) with LF (\\n).
+    This will convert the following sequences into the standard \\n
+    line break:
+
+        - CRLF (\\r\\n), used on Windows and in some communication
+          protocols
+        - CR (\\r), once used on Mac OS Classic, and now kept alive
+          by misguided software such as Microsoft Office for Mac
+        - LINE SEPARATOR (\\u2028) and PARAGRAPH SEPARATOR (\\u2029),
+          defined by Unicode and used to sow confusion and discord
+        - NEXT LINE (\\x85), a C1 control character that is certainly
+          not what you meant
+
+    The NEXT LINE character is a bit of an odd case, because it
+    usually won't show up if `fix_encoding` is also being run.
+    \\x85 is very common mojibake for \\u2026, HORIZONTAL ELLIPSIS.
+
+        >>> print(fix_line_breaks(
+        ...     "This string is made of two things:\u2029"
+        ...     "1. Unicode\u2028"
+        ...     "2. Spite"
+        ... ))
+        This string is made of two things:
+        1. Unicode
+        2. Spite
+
+    For further testing and examples, let's define a function to make sure
+    we can see the control characters in their escaped form:
+
+        >>> def eprint(text):
+        ...     print(text.encode('unicode-escape').decode('ascii'))
+
+        >>> eprint(fix_line_breaks("Content-type: text/plain\r\n\r\nHi."))
+        Content-type: text/plain\n\nHi.
+
+        >>> eprint(fix_line_breaks("This is how Microsoft \r trolls Mac users"))
+        This is how Microsoft \n trolls Mac users
+
+        >>> eprint(fix_line_breaks("What is this \x85 I don't even"))
+        What is this \n I don't even
     """
-    return text.replace('\r\n', '\n').replace('\r', '\n')
+    return text.replace('\r\n', '\n').replace('\r', '\n')\
+               .replace('\u2028', '\n').replace('\u2029', '\n')\
+               .replace('\u0085', '\n')
+
+
+SURROGATE_RE = re.compile('[\ud800-\udfff]')
+SURROGATE_PAIR_RE = re.compile('[\ud800-\udbff][\udc00-\udfff]')
+
+
+def convert_surrogate_pair(match):
+    """
+    Convert a surrogate pair to the single codepoint it represents.
+
+    This implements the formula described at:
+    http://en.wikipedia.org/wiki/Universal_Character_Set_characters#Surrogates
+    """
+    pair = match.group(0)
+    codept = 0x10000 + (ord(pair[0]) - 0xd800) * 0x400 + (ord(pair[1]) - 0xdc00)
+    return unichr(codept)
+
+
+def fix_surrogates(text):
+    """
+    Replace 16-bit surrogate codepoints with the characters they represent
+    (when properly paired), or with \ufffd otherwise.
+
+        >>> high_surrogate = unichr(0xd83d)
+        >>> low_surrogate = unichr(0xdca9)
+        >>> print(fix_surrogates(high_surrogate + low_surrogate))
+        💩
+        >>> print(fix_surrogates(low_surrogate + high_surrogate))
+        ��
+
+    The above doctest had to be very carefully written, because even putting
+    the Unicode escapes of the surrogates in the docstring was causing
+    various tools to fail, which I think just goes to show why this fixer is
+    necessary.
+    """
+    if SURROGATE_RE.search(text):
+        text = SURROGATE_PAIR_RE.sub(convert_surrogate_pair, text)
+        text = SURROGATE_RE.sub('\ufffd', text)
+    return text
 
 
 def remove_control_chars(text):
     """
-    Remove all control characters except for the important ones.
+    Remove all ASCII control characters except for the important ones.
 
     This removes characters in these ranges:
 
@@ -342,46 +497,158 @@ def remove_control_chars(text):
     - LF (U+000A)
     - FF (U+000C)
     - CR (U+000D)
+
+    Feel free to object that FF isn't "commonly" used for formatting. I've at
+    least seen it used.
     """
     return text.translate(CONTROL_CHARS)
 
 
 def remove_bom(text):
     r"""
-    Remove a left-over byte-order mark.
+    Remove a byte-order mark that was accidentally decoded as if it were part
+    of the text.
 
-    >>> print(remove_bom(unichr(0xfeff) + "Where do you want to go today?"))
+    >>> print(remove_bom("\ufeffWhere do you want to go today?"))
     Where do you want to go today?
     """
     return text.lstrip(unichr(0xfeff))
 
 
-def remove_unsafe_private_use(text):
+# Define a regex to match valid escape sequences in Python string literals.
+ESCAPE_SEQUENCE_RE = re.compile(r'''
+    ( \\U........      # 8-digit hex escapes
+    | \\u....          # 4-digit hex escapes
+    | \\x..            # 2-digit hex escapes
+    | \\[0-7]{1,3}     # Octal escapes
+    | \\N\{[^}]+\}     # Unicode characters by name
+    | \\[\\'"abfnrtv]  # Single-character escapes
+    )''', re.UNICODE | re.VERBOSE)
+
+
+def decode_escapes(text):
     r"""
-    Python 3.3's Unicode support isn't perfect, and in fact there are certain
-    string operations that will crash some versions of it with a SystemError:
-    http://bugs.python.org/issue18183
+    Decode backslashed escape sequences, including \\x, \\u, and \\U character
+    references, even in the presence of other Unicode.
 
-    You can trigger the bug by running `` '\U00010000\U00100000'.lower() ``.
+    This is what Python's "string-escape" and "unicode-escape" codecs were
+    meant to do, but in contrast, this actually works. It will decode the
+    string exactly the same way that the Python interpreter decodes its string
+    literals.
 
-    The best solution is to remove all characters from Supplementary Private
-    Use Area B, using a regex that is known not to crash given those
-    characters.
+        >>> factoid = '\\u20a1 is the currency symbol for the colón.'
+        >>> print(factoid[1:])
+        u20a1 is the currency symbol for the colón.
+        >>> print(decode_escapes(factoid))
+        ₡ is the currency symbol for the colón.
 
-    These are the characters from U+100000 to U+10FFFF. It's sad to lose an
-    entire plane of Unicode, but on the other hand, these characters are not
-    assigned and never will be. If you get one of these characters and don't
-    know what its purpose is, its purpose is probably to crash your code.
+    Even though Python itself can read string literals with a combination of
+    escapes and literal Unicode -- you're looking at one right now -- the
+    "unicode-escape" codec doesn't work on literal Unicode. (See
+    http://stackoverflow.com/a/24519338/773754 for more details.)
 
-    If you were using these for actual private use, this might be inconvenient.
-    You can turn off this fixer, of course, but I kind of encourage using
-    Supplementary Private Use Area A instead.
+    Instead, this function searches for just the parts of a string that
+    represent escape sequences, and decodes them, leaving the rest alone. All
+    valid escape sequences are made of ASCII characters, and this allows
+    "unicode-escape" to work correctly.
 
-        >>> print(remove_unsafe_private_use('\U0001F4A9\U00100000'))
-        💩
-
-    This fixer is off by default in Python 3.4 or later. (The bug is actually
-    fixed in 3.3.3 and 2.7.6, but I don't want the default behavior to change
-    based on a micro version upgrade of Python.)
+    This fix cannot be automatically applied by the `ftfy.fix_text` function,
+    because escaped text is not necessarily a mistake, and there is no way
+    to distinguish text that's supposed to be escaped from text that isn't.
     """
-    return UNSAFE_PRIVATE_USE_RE.sub('', text)
+    def decode_match(match):
+        "Given a regex match, decode the escape sequence it contains."
+        return codecs.decode(match.group(0), 'unicode-escape')
+
+    return ESCAPE_SEQUENCE_RE.sub(decode_match, text)
+
+
+def restore_byte_a0(byts):
+    """
+    Some mojibake has been additionally altered by a process that said "hmm,
+    byte A0, that's basically a space!" and replaced it with an ASCII space.
+    When the A0 is part of a sequence that we intend to decode as UTF-8,
+    changing byte A0 to 20 would make it fail to decode.
+
+    This process finds sequences that would convincingly decode as UTF-8 if
+    byte 20 were changed to A0, and puts back the A0. For the purpose of
+    deciding whether this is a good idea, this step gets a cost of twice
+    the number of bytes that are changed.
+
+    This is used as a step within `fix_encoding`.
+    """
+    def replacement(match):
+        "The function to apply when this regex matches."
+        return match.group(0).replace(b'\x20', b'\xa0')
+
+    return ALTERED_UTF8_RE.sub(replacement, byts)
+
+
+def replace_lossy_sequences(byts):
+    """
+    This function identifies sequences where information has been lost in
+    a "sloppy" codec, indicated by byte 1A, and if they would otherwise look
+    like a UTF-8 sequence, it replaces them with the UTF-8 sequence for U+FFFD.
+
+    A further explanation:
+
+    ftfy can now fix text in a few cases that it would previously fix
+    incompletely, because of the fact that it can't successfully apply the fix
+    to the entire string. A very common case of this is when characters have
+    been erroneously decoded as windows-1252, but instead of the "sloppy"
+    windows-1252 that passes through unassigned bytes, the unassigned bytes get
+    turned into U+FFFD (�), so we can't tell what they were.
+
+    This most commonly happens with curly quotation marks that appear
+    ``â€œ like this â€�``.
+
+    We can do better by building on ftfy's "sloppy codecs" to let them handle
+    less-sloppy but more-lossy text. When they encounter the character ``�``,
+    instead of refusing to encode it, they encode it as byte 1A -- an
+    ASCII control code called SUBSTITUTE that once was meant for about the same
+    purpose. We can then apply a fixer that looks for UTF-8 sequences where
+    some continuation bytes have been replaced by byte 1A, and decode the whole
+    sequence as �; if that doesn't work, it'll just turn the byte back into �
+    itself.
+
+    As a result, the above text ``â€œ like this â€�`` will decode as
+    ``“ like this �``.
+
+    If U+1A was actually in the original string, then the sloppy codecs will
+    not be used, and this function will not be run, so your weird control
+    character will be left alone but wacky fixes like this won't be possible.
+
+    This is used as a step within `fix_encoding`.
+    """
+    def replacement(match):
+        "The function to apply when this regex matches."
+        return '\ufffd'.encode('utf-8')
+
+    fixed = LOSSY_UTF8_RE.sub(replacement, byts)
+    return fixed
+
+
+def fix_partial_utf8_punct_in_1252(text):
+    """
+    Fix particular characters that seem to be found in the wild encoded in
+    UTF-8 and decoded in Latin-1 or Windows-1252, even when this fix can't be
+    consistently applied.
+
+    For this function, we assume the text has been decoded in Windows-1252.
+    If it was decoded in Latin-1, we'll call this right after it goes through
+    the Latin-1-to-Windows-1252 fixer.
+
+    This is used as a step within `fix_encoding`.
+    """
+    def replacement(match):
+        "The function to apply when this regex matches."
+        return match.group(0).encode('sloppy-windows-1252').decode('utf-8')
+    return PARTIAL_UTF8_PUNCT_RE.sub(replacement, text)
+
+
+TRANSCODERS = {
+    'restore_byte_a0': restore_byte_a0,
+    'replace_lossy_sequences': replace_lossy_sequences,
+    'fix_partial_utf8_punct_in_1252': fix_partial_utf8_punct_in_1252
+}
+
