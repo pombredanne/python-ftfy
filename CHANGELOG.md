@@ -1,3 +1,42 @@
+## Version 4.1.1 (April 13, 2016)
+
+- Bug fix: in the command-line interface, the `-e` option had no effect on
+  Python 3 when using standard input. Now, it correctly lets you specify
+  a different encoding for standard input.
+
+## Version 4.1.0 (February 25, 2016)
+
+Heuristic changes:
+
+- ftfy can now deal with "lossy" mojibake. If your text has been run through
+  a strict Windows-1252 decoder, such as the one in Python, it may contain
+  the replacement character � (U+FFFD) where there were bytes that are
+  unassigned in Windows-1252.
+
+  Although ftfy won't recover the lost information, it can now detect this
+  situation, replace the entire lossy character with �, and decode the rest of
+  the characters. Previous versions would be unable to fix any string that
+  contained U+FFFD.
+
+  As an example, text in curly quotes that gets corrupted `â€œ like this â€�`
+  now gets fixed to be `“ like this �`.
+
+- Updated the data file of Unicode character categories to Unicode 8.0, as used
+  in Python 3.5.0. (No matter what version of Python you're on, ftfy uses the
+  same data.)
+
+- Heuristics now count characters such as `~` and `^` as punctuation instead
+  of wacky math symbols, improving the detection of mojibake in some edge cases.
+
+New features:
+
+- A new module, `ftfy.formatting`, can be used to justify Unicode text in a
+  monospaced terminal. It takes into account that each character can take up
+  anywhere from 0 to 2 character cells.
+
+- Internally, the `utf-8-variants` codec was simplified and optimized.
+
+
 ## Version 4.0.0 (April 10, 2015)
 
 Breaking changes:
