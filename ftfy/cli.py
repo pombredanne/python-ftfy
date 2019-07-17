@@ -1,12 +1,9 @@
 """
 A command-line utility for fixing text found in a file.
 """
-from ftfy import fix_file, __version__
-
 import sys
-import io
-import codecs
-from ftfy.compatibility import PYTHON2
+import os
+from ftfy import fix_file, __version__
 
 
 ENCODE_ERROR_TEXT_UNIX = """ftfy error:
@@ -35,6 +32,10 @@ This input couldn't be decoded as %r. We got the following error:
 ftfy works best when its input is in a known encoding. You can use `ftfy -g`
 to guess, if you're desperate. Otherwise, give the encoding name with the
 `-e` option, such as `ftfy -e latin-1`.
+"""
+
+SAME_FILE_ERROR_TEXT = """ftfy error:
+Can't read and write the same file. Please output to a new file instead.
 """
 
 
@@ -75,19 +76,17 @@ def main():
     if args.filename == '-':
         # Get a standard input stream made of bytes, so we can decode it as
         # whatever encoding is necessary.
-        if PYTHON2:
-            file = sys.stdin
-        else:
-            file = sys.stdin.buffer
+        file = sys.stdin.buffer
     else:
         file = open(args.filename, 'rb')
 
     if args.output == '-':
-        encode_output = PYTHON2
         outfile = sys.stdout
     else:
-        encode_output = False
-        outfile = io.open(args.output, 'w', encoding='utf-8')
+        if os.path.realpath(args.output) == os.path.realpath(args.filename):
+            sys.stderr.write(SAME_FILE_ERROR_TEXT)
+            sys.exit(1)
+        outfile = open(args.output, 'w', encoding='utf-8')
 
     normalization = args.normalization
     if normalization.lower() == 'none':
@@ -102,17 +101,14 @@ def main():
         for line in fix_file(file, encoding=encoding,
                              fix_entities=fix_entities,
                              normalization=normalization):
-            if encode_output:
-                outfile.write(line.encode('utf-8'))
-            else:
-                try:
-                    outfile.write(line)
-                except UnicodeEncodeError:
-                    if sys.platform == 'win32':
-                        sys.stderr.write(ENCODE_ERROR_TEXT_WINDOWS)
-                    else:
-                        sys.stderr.write(ENCODE_ERROR_TEXT_UNIX)
-                    sys.exit(1)
+            try:
+                outfile.write(line)
+            except UnicodeEncodeError:
+                if sys.platform == 'win32':
+                    sys.stderr.write(ENCODE_ERROR_TEXT_WINDOWS)
+                else:
+                    sys.stderr.write(ENCODE_ERROR_TEXT_UNIX)
+                sys.exit(1)
     except UnicodeDecodeError as err:
         sys.stderr.write(DECODE_ERROR_TEXT % (encoding, err))
         sys.exit(1)

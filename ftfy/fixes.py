@@ -1,20 +1,18 @@
-# -*- coding: utf-8 -*-
 """
 This module contains the individual fixes that the main fix_text function
 can perform.
 """
 
-from __future__ import unicode_literals
+import re
+import codecs
+import warnings
 from ftfy.chardata import (possible_encoding, CHARMAP_ENCODINGS,
                            CONTROL_CHARS, LIGATURES, WIDTH_MAP,
                            PARTIAL_UTF8_PUNCT_RE, ALTERED_UTF8_RE,
-                           LOSSY_UTF8_RE, SINGLE_QUOTE_RE, DOUBLE_QUOTE_RE)
+                           LOSSY_UTF8_RE, SINGLE_QUOTE_RE, DOUBLE_QUOTE_RE,
+                           C1_CONTROL_RE)
 from ftfy.badness import text_cost
-from ftfy.compatibility import htmlentitydefs, unichr
-import re
-import sys
-import codecs
-import warnings
+from html import entities
 
 
 BYTES_ERROR_TEXT = """Hey wait, this isn't Unicode.
@@ -34,8 +32,8 @@ they're in:
 
 If you're confused by this, please read the Python Unicode HOWTO:
 
-    http://docs.python.org/%d/howto/unicode.html
-""" % sys.version_info[0]
+    http://docs.python.org/3/howto/unicode.html
+"""
 
 
 def fix_encoding(text):
@@ -125,8 +123,10 @@ def fix_text_encoding(text):
 # that these encodings will only be used if they fix multiple problems.
 ENCODING_COSTS = {
     'macroman': 2,
+    'iso-8859-2': 2,
+    'sloppy-windows-1250': 2,
+    'sloppy-windows-1251': 3,
     'cp437': 3,
-    'sloppy-windows-1251': 5
 }
 
 
@@ -195,16 +195,16 @@ def fix_one_step_and_explain(text):
                 # except they have b' ' where b'\xa0' would belong.
                 if ALTERED_UTF8_RE.search(encoded_bytes):
                     encoded_bytes = restore_byte_a0(encoded_bytes)
-                    cost = encoded_bytes.count(b'\xa0') * 2
+                    cost = encoded_bytes.count(0xa0) * 2
                     transcode_steps.append(('transcode', 'restore_byte_a0', cost))
 
                 # Check for the byte 0x1a, which indicates where one of our
                 # 'sloppy' codecs found a replacement character.
-                if encoding.startswith('sloppy') and b'\x1a' in encoded_bytes:
+                if encoding.startswith('sloppy') and 0x1a in encoded_bytes:
                     encoded_bytes = replace_lossy_sequences(encoded_bytes)
                     transcode_steps.append(('transcode', 'replace_lossy_sequences', 0))
 
-                if b'\xed' in encoded_bytes or b'\xc0' in encoded_bytes:
+                if 0xed in encoded_bytes or 0xc0 in encoded_bytes:
                     decoding = 'utf-8-variants'
 
                 decode_step = ('decode', decoding, 0)
@@ -293,43 +293,52 @@ def apply_plan(text, plan):
 HTML_ENTITY_RE = re.compile(r"&#?\w{0,8};")
 
 
+def _unescape_fixup(match):
+    """
+    Replace one matched HTML entity with the character it represents,
+    if possible.
+    """
+    text = match.group(0)
+    if text[:2] == "&#":
+        # character reference
+        try:
+            if text[:3] == "&#x":
+                codept = int(text[3:-1], 16)
+            else:
+                codept = int(text[2:-1])
+            if 0x80 <= codept < 0xa0:
+                # Decode this range of characters as Windows-1252, as Web
+                # browsers do in practice.
+                return bytes([codept]).decode('sloppy-windows-1252')
+            else:
+                return chr(codept)
+        except ValueError:
+            return text
+    else:
+        # This is a named entity; if it's a known HTML5 entity, replace
+        # it with the appropriate character.
+        try:
+            return entities.html5[text[1:]]
+        except KeyError:
+            return text
+
+
 def unescape_html(text):
     """
     Decode all three types of HTML entities/character references.
 
-    Code by Fredrik Lundh of effbot.org. Rob Speer made a slight change
+    Code by Fredrik Lundh of effbot.org. Robyn Speer made a slight change
     to it for efficiency: it won't match entities longer than 8 characters,
     because there are no valid entities like that.
 
         >>> print(unescape_html('&lt;tag&gt;'))
         <tag>
     """
-    def fixup(match):
-        """
-        Replace one matched HTML entity with the character it represents,
-        if possible.
-        """
-        text = match.group(0)
-        if text[:2] == "&#":
-            # character reference
-            try:
-                if text[:3] == "&#x":
-                    return unichr(int(text[3:-1], 16))
-                else:
-                    return unichr(int(text[2:-1]))
-            except ValueError:
-                pass
-        else:
-            # named entity
-            try:
-                text = unichr(htmlentitydefs.name2codepoint[text[1:-1]])
-            except KeyError:
-                pass
-        return text  # leave as is
-    return HTML_ENTITY_RE.sub(fixup, text)
+    return HTML_ENTITY_RE.sub(_unescape_fixup, text)
 
 
 ANSI_RE = re.compile('\033\\[((?:\\d|;)*)([a-zA-Z])')
+
 
 def remove_terminal_escapes(text):
     r"""
@@ -454,7 +463,7 @@ def convert_surrogate_pair(match):
     """
     pair = match.group(0)
     codept = 0x10000 + (ord(pair[0]) - 0xd800) * 0x400 + (ord(pair[1]) - 0xdc00)
-    return unichr(codept)
+    return chr(codept)
 
 
 def fix_surrogates(text):
@@ -462,8 +471,8 @@ def fix_surrogates(text):
     Replace 16-bit surrogate codepoints with the characters they represent
     (when properly paired), or with \ufffd otherwise.
 
-        >>> high_surrogate = unichr(0xd83d)
-        >>> low_surrogate = unichr(0xdca9)
+        >>> high_surrogate = chr(0xd83d)
+        >>> low_surrogate = chr(0xdca9)
         >>> print(fix_surrogates(high_surrogate + low_surrogate))
         💩
         >>> print(fix_surrogates(low_surrogate + high_surrogate))
@@ -482,24 +491,31 @@ def fix_surrogates(text):
 
 def remove_control_chars(text):
     """
-    Remove all ASCII control characters except for the important ones.
+    Remove various control characters that you probably didn't intend to be in
+    your text. Many of these characters appear in the table of "Characters not
+    suitable for use with markup" at
+    http://www.unicode.org/reports/tr20/tr20-9.html.
 
-    This removes characters in these ranges:
+    This includes:
 
-    - U+0000 to U+0008
-    - U+000B
-    - U+000E to U+001F
-    - U+007F
+    - ASCII control characters, except for the important whitespace characters
+      (U+00 to U+08, U+0B, U+0E to U+1F, U+7F)
+    - Deprecated Arabic control characters (U+206A to U+206F)
+    - Interlinear annotation characters (U+FFF9 to U+FFFB)
+    - The Object Replacement Character (U+FFFC)
+    - The byte order mark (U+FEFF)
+    - Musical notation control characters (U+1D173 to U+1D17A)
+    - Tag characters (U+E0000 to U+E007F)
 
-    It leaves alone these characters that are commonly used for formatting:
+    However, these similar characters are left alone:
 
-    - TAB (U+0009)
-    - LF (U+000A)
-    - FF (U+000C)
-    - CR (U+000D)
-
-    Feel free to object that FF isn't "commonly" used for formatting. I've at
-    least seen it used.
+    - Control characters that produce whitespace (U+09, U+0A, U+0C, U+0D,
+      U+2028, and U+2029)
+    - C1 control characters (U+80 to U+9F) -- even though they are basically
+      never used intentionally, they are important clues about what mojibake
+      has happened
+    - Control characters that affect glyph rendering, such as joiners and
+      right-to-left marks (U+200C to U+200F, U+202A to U+202E)
     """
     return text.translate(CONTROL_CHARS)
 
@@ -509,10 +525,10 @@ def remove_bom(text):
     Remove a byte-order mark that was accidentally decoded as if it were part
     of the text.
 
-    >>> print(remove_bom("\ufeffWhere do you want to go today?"))
+    >>> print(remove_bom(chr(0xfeff) + "Where do you want to go today?"))
     Where do you want to go today?
     """
-    return text.lstrip(unichr(0xfeff))
+    return text.lstrip(chr(0xfeff))
 
 
 # Define a regex to match valid escape sequences in Python string literals.
@@ -618,7 +634,7 @@ def replace_lossy_sequences(byts):
     not be used, and this function will not be run, so your weird control
     character will be left alone but wacky fixes like this won't be possible.
 
-    This is used as a step within `fix_encoding`.
+    This is used as a transcoder within `fix_encoding`.
     """
     return LOSSY_UTF8_RE.sub('\ufffd'.encode('utf-8'), byts)
 
@@ -629,16 +645,23 @@ def fix_partial_utf8_punct_in_1252(text):
     UTF-8 and decoded in Latin-1 or Windows-1252, even when this fix can't be
     consistently applied.
 
-    For this function, we assume the text has been decoded in Windows-1252.
-    If it was decoded in Latin-1, we'll call this right after it goes through
-    the Latin-1-to-Windows-1252 fixer.
+    One form of inconsistency we need to deal with is that some character might
+    be from the Latin-1 C1 control character set, while others are from the
+    set of characters that take their place in Windows-1252. So we first replace
+    those characters, then apply a fix that only works on Windows-1252 characters.
 
-    This is used as a step within `fix_encoding`.
+    This is used as a transcoder within `fix_encoding`.
     """
-    def replacement(match):
+    def latin1_to_w1252(match):
+        "The function to apply when this regex matches."
+        return match.group(0).encode('latin-1').decode('sloppy-windows-1252')
+
+    def w1252_to_utf8(match):
         "The function to apply when this regex matches."
         return match.group(0).encode('sloppy-windows-1252').decode('utf-8')
-    return PARTIAL_UTF8_PUNCT_RE.sub(replacement, text)
+
+    text = C1_CONTROL_RE.sub(latin1_to_w1252, text)
+    return PARTIAL_UTF8_PUNCT_RE.sub(w1252_to_utf8, text)
 
 
 TRANSCODERS = {
@@ -646,4 +669,3 @@ TRANSCODERS = {
     'replace_lossy_sequences': replace_lossy_sequences,
     'fix_partial_utf8_punct_in_1252': fix_partial_utf8_punct_in_1252
 }
-

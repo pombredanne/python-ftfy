@@ -6,8 +6,7 @@
 ftfy: fixes text for you
 ========================
 
-`ftfy` fixes Unicode that's broken in various ways. It works in Python 2.7,
-Python 3.2, or later.
+**ftfy** fixes Unicode that's broken in various ways.
 
 The goal of ftfy is to **take in bad Unicode and output good Unicode**, for use
 in your Unicode-aware code. This is different from taking in non-Unicode and
@@ -19,18 +18,15 @@ Of course you're better off if your input is decoded properly and has no
 glitches. But you often don't have any control over your input; it's someone
 else's mistake, but it's your problem now.
 
-`ftfy` will do everything it can to fix the problem.
+ftfy will do everything it can to fix the problem.
 
 .. note::
 
-    Time is marching on. ftfy 4.x supports Python 2.7 and 3.x, but when
-    ftfy 5.0 is released, it will probably only support Python 3.
+    This documentation is for ftfy 5, which runs on Python 3 only, following
+    the plan to drop Python 2 support that was announced in ftfy 3.3.
 
-    If you're running on Python 2, ftfy 4.x will keep working for you. You
-    don't have to upgrade to 5.0. You can save yourself a headache by adding
-    `ftfy < 5` to your requirements, making sure you stay on version 4.
-
-    See `Future versions of ftfy`_ for why this needs to happen.
+    If you're running on Python 2, ftfy 4.x will keep working for you. In that
+    case, you should add `ftfy < 5` to your requirements.
 
 
 Mojibake
@@ -102,7 +98,7 @@ interacting with the erroneous decoding. The main function of ftfy,
     parts of NFKC are implemented as separate, limited fixes.
 
 
-There are other interesting things that `ftfy` can do that aren't part of
+There are other interesting things that ftfy can do that aren't part of
 the :func:`ftfy.fix_text` pipeline, such as:
 
 * :func:`ftfy.explain_unicode`: show you what's going on in a string,
@@ -113,15 +109,17 @@ the :func:`ftfy.fix_text` pipeline, such as:
 Encodings ftfy can handle
 -------------------------
 
-`ftfy` can't fix all possible mix-ups. Its goal is to cover the most common
+ftfy can't fix all possible mix-ups. Its goal is to cover the most common
 encoding mix-ups while keeping false positives to a very low rate.
 
-`ftfy` can understand text that was decoded as any of these single-byte
+ftfy can understand text that was decoded as any of these single-byte
 encodings:
 
 - Latin-1 (ISO-8859-1)
 - Windows-1252 (cp1252 -- used in Microsoft products)
 - Windows-1251 (cp1251 -- the Russian version of cp1252)
+- Windows-1250 (cp1250 -- the Eastern European version of cp1252)
+- ISO-8859-2 (which is not quite the same as Windows-1250)
 - MacRoman (used on Mac OS 9 and earlier)
 - cp437 (used in MS-DOS and some versions of the Windows command prompt)
 
@@ -139,14 +137,45 @@ However, ftfy cannot understand other mixups between single-byte encodings,
 because it is extremely difficult to detect which mixup in particular is the
 one that happened.
 
-We also can't handle the non-UTF encodings used for Chinese, Japanese, and
+We also can't handle the legacy encodings used for Chinese, Japanese, and
 Korean, such as ``shift-jis`` and ``gb18030``.  See `issue #34
 <https://github.com/LuminosoInsight/python-ftfy/issues/34>`_ for why this is so
 hard.
 
-But remember that the input to `ftfy` is Unicode, so it handles actual
+But remember that the input to ftfy is Unicode, so it handles actual
 CJK *text* just fine. It just can't discover that a CJK *encoding* introduced
 mojibake into the text.
+
+
+Citing ftfy
+-----------
+ftfy has been used as a crucial data processing step in major NLP research.
+
+It's important to give credit appropriately to everyone whose work you build on
+in research. This includes software, not just high-status contributions such as
+mathematical models. All I ask when you use ftfy for research is that you cite
+it. 
+
+ftfy has a citable record [on Zenodo](https://zenodo.org/record/2591652).
+A citation of ftfy may look like this:
+
+    Robyn Speer. (2019). ftfy (Version 5.5). Zenodo.
+    http://doi.org/10.5281/zenodo.2591652
+
+In BibTeX format, the citation is::
+
+    @misc{speer-2019-ftfy,
+      author       = {Robyn Speer},
+      title        = {ftfy},
+      note         = {Version 5.5},
+      year         = 2019,
+      howpublished = {Zenodo},
+      doi          = {10.5281/zenodo.2591652},
+      url          = {https://doi.org/10.5281/zenodo.2591652}
+    }
+
+
+
 
 Using ftfy
 ----------
@@ -169,14 +198,14 @@ Check that the default fixes are appropriate for your use case. For example:
   marks with nice typography. You could even consider doing quite the opposite
   of `uncurl_quotes`, running `smartypants`_ on the result to make all the
   punctuation nice.
-  
+
 .. _smartypants: http://pythonhosted.org/smartypants/
 
 If the only fix you need is to detect and repair decoding errors (mojibake), then
 you should use :func:`ftfy.fix_encoding` directly.
 
 .. versionchanged:: 4.0
-   The default normalization was changed from `'NFKC'` to `'NFC'`. The new options
+   The default normalization was changed from `'NFKC'` to `'NFC'`. The options
    *fix_latin_ligatures* and *fix_character_width* were added to implement some
    of the less lossy parts of NFKC normalization on top of NFC.
 
@@ -190,29 +219,21 @@ you should use :func:`ftfy.fix_encoding` directly.
 
 .. autofunction:: ftfy.explain_unicode
 
-Non-Unicode strings
--------------------
-
-When first using ftfy, you might be confused to find that you can't give it a
-bytestring (the type of object called `str` in Python 2).
-
-ftfy fixes text. Treating bytestrings as text is exactly the kind of thing that
-causes the Unicode problems that ftfy has to fix. So if you don't give it a
-Unicode string, ftfy will point you to the `Python Unicode HOWTO`_.
-
-.. _`Python Unicode Howto`: http://docs.python.org/3/howto/unicode.html
-
-Reasonable ways that you might exchange data, such as JSON or XML, already have
-perfectly good ways of expressing Unicode strings. Given a Unicode string, ftfy
-can apply fixes that are very likely to work without false positives.
 
 A note on encoding detection
 ----------------------------
 
-If your input is a mess of unmarked bytes, you might want a tool that can just
-statistically analyze those bytes and predict what encoding they're in.
+:func:`ftfy.fix_text` expects its input to be a Python 3 `str` (a Unicode
+string).  If you pass in `bytes` instead, ftfy will point you to the `Python
+Unicode HOWTO`_.
 
-`ftfy` is not that tool. The :func:`ftfy.guess_bytes` function it contains will
+.. _`Python Unicode HOWTO`: http://docs.python.org/3/howto/unicode.html
+
+Now, you may know that your input is a mess of bytes in an unknown encoding,
+and you might want a tool that can just statistically analyze those bytes and
+predict what encoding they're in.
+
+ftfy is not that tool. The :func:`ftfy.guess_bytes` function it contains will
 do this in very limited cases, but to support more encodings from around the
 world, something more is needed.
 
@@ -244,7 +265,7 @@ Here's the usage documentation for the `ftfy` command::
                 [--preserve-entities]
                 [filename]
 
-    ftfy (fixes text for you), version 4.0.0
+    ftfy (fixes text for you), version 5.0
 
     positional arguments:
       filename              The file whose Unicode is to be fixed. Defaults to -,
@@ -310,37 +331,11 @@ Variants of UTF-8
 
 *ftfy.chardata* and *ftfy.build_data*: trivia about characters
 --------------------------------------------------------------
-These files load information about the character properties in Unicode 8.0.
-Yes, even if your version of Python doesn't support Unicode 8.0. This ensures
+These files load information about the character properties in Unicode 11.0.
+Yes, even if your version of Python doesn't support Unicode 11.0. This ensures
 that ftfy's behavior is consistent across versions.
 
 .. automodule:: ftfy.chardata
    :members:
 
 .. autofunction:: ftfy.build_data.make_char_data_file
-
-
-Future versions of ftfy
-=======================
-    
-ftfy has full support for Python 2.7, even including a backport of Unicode 8
-character classes to Python 2. But given the sweeping changes to Unicode in
-Python, it's getting inconvenient to add new features to ftfy that work the
-same on both versions.
-
-ftfy 5.0, when it is released, will probably only support Python 3.
-
-If you want to see examples of why ftfy is particularly difficult to maintain
-on two versions of Python (which is more like three versions because of Python
-2's "wide" and "narrow" builds), take a look at functions such as
-:func:`ftfy.bad_codecs.utf8_variants.mangle_surrogates` and
-:func:`ftfy.compatibility._narrow_unichr_workaround`.
-
-We're following the lead of venerable projects such as jQuery. jQuery dropped
-support for IE 6-8 in version 2.0, and in doing so, it became much simpler and
-faster for people who didn't need to support old versions of IE in their web
-applications. Meanwhile, jQuery 1.9 remained there for those who needed it.
-
-Similarly, ftfy 5.0 will reduce the size and complexity of the code greatly,
-but ftfy 4.x will remain there. If you're running on Python 2, please make sure
-that `ftfy < 5` is in your requirements list, not just `ftfy`.

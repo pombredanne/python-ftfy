@@ -1,13 +1,11 @@
-# -*- coding: utf-8 -*-
 """
 Heuristics to determine whether re-encoding text is actually making it
 more reasonable.
 """
 
-from __future__ import unicode_literals
-from ftfy.chardata import chars_to_classes
 import re
 import unicodedata
+from ftfy.chardata import chars_to_classes
 
 # The following regex uses the mapping of character classes to ASCII
 # characters defined in chardata.py and build_data.py:
@@ -21,8 +19,7 @@ import unicodedata
 # m = Letter modifier (Lm)
 # M = Mark (Mc, Me, Mn)
 # N = Miscellaneous numbers (No)
-# 0 = Math symbol (Sm)
-# 1 = Currency symbol (Sc)
+# 1 = Math symbol (Sm) or currency symbol (Sc)
 # 2 = Symbol modifier (Sk)
 # 3 = Other symbol (So)
 # S = UTF-16 surrogate
@@ -37,9 +34,6 @@ def _make_weirdness_regex():
     The more matches there are, the weirder the text is.
     """
     groups = []
-
-    # Match lowercase letters that are followed by non-ASCII uppercase letters
-    groups.append('lA')
 
     # Match diacritical marks, except when they modify a non-cased letter or
     # another mark.
@@ -59,6 +53,21 @@ def _make_weirdness_regex():
     groups.append('[Ll][AaC]')
     groups.append('[AaC][Ll]')
 
+    # Match IPA letters next to capital letters.
+    #
+    # IPA uses lowercase letters only. Some accented capital letters next to
+    # punctuation can accidentally decode as IPA letters, and an IPA letter
+    # appearing next to a capital letter is a good sign that this happened.
+    groups.append('[LA]i')
+    groups.append('i[LA]')
+
+    # Match non-combining diacritics. We've already set aside the common ones
+    # like ^ (the CIRCUMFLEX ACCENT, repurposed as a caret, exponent sign,
+    # or happy eye) and assigned them to category 'o'. The remaining ones,
+    # like the diaeresis (¨), are pretty weird to see on their own instead
+    # of combined with a letter.
+    groups.append('2')
+
     # Match C1 control characters, which are almost always the result of
     # decoding Latin-1 that was meant to be Windows-1252.
     groups.append('X')
@@ -71,31 +80,79 @@ def _make_weirdness_regex():
     # - Modifier marks (M)
     # - Letter modifiers (m)
     # - Miscellaneous numbers (N)
-    # - Symbols (0123)
+    # - Symbols (1 or 3, because 2 is already weird on its own)
 
-    exclusive_categories = 'MmN0123'
+    exclusive_categories = 'MmN13'
     for cat1 in exclusive_categories:
         others_range = ''.join(c for c in exclusive_categories if c != cat1)
         groups.append('{cat1}[{others_range}]'.format(
             cat1=cat1, others_range=others_range
         ))
-    regex = '|'.join('({0})'.format(group) for group in groups)
+    regex = '|'.join(groups)
     return re.compile(regex)
+
 
 WEIRDNESS_RE = _make_weirdness_regex()
 
-# A few characters are common ending punctuation that can show up at the end
-# of a mojibake sequence. It's plausible that such a character could appear
-# after an accented capital letter, for example, so we'll want to add a
-# slight preference to leave these characters alone.
-ENDING_PUNCT_RE = re.compile(
+# These characters appear in mojibake but also appear commonly on their own.
+# We have a slight preference to leave them alone.
+COMMON_SYMBOL_RE = re.compile(
     '['
     '\N{HORIZONTAL ELLIPSIS}\N{EM DASH}\N{EN DASH}'
+    '\N{LEFT SINGLE QUOTATION MARK}\N{LEFT DOUBLE QUOTATION MARK}'
     '\N{RIGHT SINGLE QUOTATION MARK}\N{RIGHT DOUBLE QUOTATION MARK}'
+    '\N{INVERTED EXCLAMATION MARK}\N{INVERTED QUESTION MARK}\N{DEGREE SIGN}'
+    '\N{TRADE MARK SIGN}'
+    '\N{REGISTERED SIGN}'
+    '\N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}'
     '\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}'
+    '\N{LEFT-POINTING DOUBLE ANGLE QUOTATION MARK}'
     '\N{RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK}'
+    '\N{NO-BREAK SPACE}'
+    '\N{ACUTE ACCENT}\N{MULTIPLICATION SIGN}\N{LATIN SMALL LETTER SHARP S}'
+    '\ufeff'  # The byte-order mark, whose encoding 'ï»¿' looks common
     ']'
 )
+
+# These are sequences that are common mojibake, resulting from common encodings
+# that are mixed up with UTF-8 on characters from their own character map.
+#
+# This helps to strengthen evidence that text should be fixed in a way that's
+# separate from the character classes above, or to counter COMMON_SYMBOL_RE's
+# fondness for characters such as inverted exclamation marks and multiplication
+# signs in contexts where they really do look like mojibake.
+
+MOJIBAKE_SYMBOL_RE = re.compile(
+    # Mojibake of low-numbered characters from ISO-8859-1 and, in some cases,
+    # ISO-8859-2. This also covers some cases from related encodings such as
+    # Windows-1252 and Windows-1250.
+    '[ÂÃĂ][\x80-\x9f€ƒ‚„†‡ˆ‰‹Œ“•˜œŸ¡¢£¤¥¦§¨ª«¬¯°±²³µ¶·¸¹º¼½¾¿ˇ˘˝]|'
+    # Characters we have to be a little more cautious about if they're at
+    # the end of a word, but totally okay to fix in the middle
+    r'[ÂÃĂ][›»‘”©™]\w|'
+    # Similar mojibake of low-numbered characters in MacRoman. Leaving out
+    # most mathy characters because of false positives, but cautiously catching
+    # "√±" (mojibake for "ñ") and "√∂" (mojibake for "ö") in the middle of a
+    # word.
+    #
+    # I guess you could almost have "a√±b" in math, except that's not where
+    # you'd want the ±. Complex numbers don't quite work that way. "√±" appears
+    # unattested in equations in my Common Crawl sample.
+    #
+    # Also left out eye-like letters, including accented o's, for when ¬ is
+    # the nose of a kaomoji.
+    '[¬√][ÄÅÇÉÑÖÜáàâäãåçéèêëíìîïñúùûü†¢£§¶ß®©™≠ÆØ¥ªæø≤≥]|'
+    r'\w√[±∂]\w|'
+    # ISO-8859-1, ISO-8859-2, or Windows-1252 mojibake of characters U+10000
+    # to U+1FFFF. (The Windows-1250 and Windows-1251 versions might be too
+    # plausible.)
+    '[ðđ][Ÿ\x9f]|'
+    # Windows-1252 or Windows-1250 mojibake of Windows punctuation characters
+    'â€|'
+    # Windows-1251 mojibake of some Windows punctuation characters
+    'вЂ[љћ¦°№™ќ“”]'
+)
+
 
 def sequence_weirdness(text):
     """
@@ -126,8 +183,11 @@ def sequence_weirdness(text):
     """
     text2 = unicodedata.normalize('NFC', text)
     weirdness = len(WEIRDNESS_RE.findall(chars_to_classes(text2)))
-    punct_discount = len(ENDING_PUNCT_RE.findall(text2))
-    return weirdness * 2 - punct_discount
+    adjustment = (
+        len(MOJIBAKE_SYMBOL_RE.findall(text2)) * 2 -
+        len(COMMON_SYMBOL_RE.findall(text2))
+    )
+    return weirdness * 2 + adjustment
 
 
 def text_cost(text):

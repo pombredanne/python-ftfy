@@ -1,31 +1,36 @@
 # ftfy: fixes text for you
 
-[![PyPI package](https://badge.fury.io/py/ftfy.svg)](http://badge.fury.io/py/ftfy)
-[![Docs](https://readthedocs.org/projects/ftfy/badge/?version=latest)](http://ftfy.readthedocs.org/en/latest/)
+[![Travis](https://img.shields.io/travis/LuminosoInsight/python-ftfy/master.svg?label=Travis%20CI)](https://travis-ci.org/LuminosoInsight/python-ftfy)
+[![PyPI package](https://badge.fury.io/py/ftfy.svg)](https://badge.fury.io/py/ftfy)
+[![Docs](https://readthedocs.org/projects/ftfy/badge/?version=latest)](https://ftfy.readthedocs.org/en/latest/)
 
 ```python
 >>> print(fix_encoding("(à¸‡'âŒ£')à¸‡"))
 (ง'⌣')ง
 ```
 
-Full documentation: **http://ftfy.readthedocs.org**
+Full documentation: **https://ftfy.readthedocs.org**
 
 ## Testimonials
 
 - “My life is livable again!”
-  — [@planarrowspace](http://twitter.com/planarrowspace)
+  — [@planarrowspace](https://twitter.com/planarrowspace)
 - “A handy piece of magic”
-  — [@simonw](http://twitter.com/simonw)
+  — [@simonw](https://twitter.com/simonw)
+- “Saved me a large amount of frustrating dev work”
+  — [@iancal](https://twitter.com/iancal)
+- “ftfy did the right thing right away, with no faffing about. Excellent work, solving a very tricky real-world (whole-world!) problem.”
+  — Brennan Young
 - “Hat mir die Tage geholfen. Im Übrigen bin ich der Meinung, dass wir keine komplexen Maschinen mit Computern bauen sollten solange wir nicht einmal Umlaute sicher verarbeiten können. :D”
-  — [Bruno Ranieri](http://yrrsinn.de/2012/09/17/gelesen-kw37/)
+  — [Bruno Ranieri](https://yrrsinn.de/2012/09/17/gelesen-kw37/)
 - “I have no idea when I’m gonna need this, but I’m definitely bookmarking it.”
-  — [/u/ocrow](http://reddit.com/u/ocrow)
+  — [/u/ocrow](https://reddit.com/u/ocrow)
 - “9.2/10”
   — [pylint](https://bitbucket.org/logilab/pylint/)
 
 ## Developed at Luminoso
 
-[Luminoso](http://www.luminoso.com) makes groundbreaking software for text
+[Luminoso](https://www.luminoso.com) makes groundbreaking software for text
 analytics that really understands what words mean, in many languages. Our
 software is used by enterprise customers such as Sony, Intel, Mars, and Scotts,
 and it's built on Python and open-source technologies.
@@ -33,14 +38,12 @@ and it's built on Python and open-source technologies.
 We use ftfy every day at Luminoso, because the first step in understanding text
 is making sure it has the correct characters in it!
 
-Luminoso is growing fast and hiring in all areas. If you're interested in
-joining us, take a look at [our careers
-page](http://www.luminoso.com/career.html).
+Luminoso is growing fast and hiring. If you're interested in joining us, take a
+look at [our careers page](https://luminoso.com/about/work-here).
 
 ## What it does
 
-`ftfy` fixes Unicode that's broken in various ways. It works in Python 2.7,
-Python 3.2, or later.
+`ftfy` fixes Unicode that's broken in various ways.
 
 The goal of `ftfy` is to **take in bad Unicode and output good Unicode**, for use
 in your Unicode-aware code. This is different from taking in non-Unicode and
@@ -70,13 +73,17 @@ often shows up as characters that turn into nonsense sequences (called
 ftfy uses heuristics to detect and undo this kind of mojibake, with a very
 low rate of false positives.
 
+This part of ftfy now has an unofficial Web implementation by simonw:
+https://ftfy.now.sh/
+
+
 ## Examples
 
 `fix_text` is the main function of ftfy. This section is meant to give you a
 taste of the things it can do. `fix_encoding` is the more specific function
 that only fixes mojibake.
 
-Please read [the documentation](http://ftfy.readthedocs.org) for more
+Please read [the documentation](https://ftfy.readthedocs.org) for more
 information on what ftfy does, and how to configure it for your needs.
 
 
@@ -112,9 +119,16 @@ LOUD NOISES
 
 ## Installing
 
-ftfy is a package that can be installed using `pip`:
+ftfy is a Python 3 package that can be installed using `pip`:
 
     pip install ftfy
+
+(Or use `pip3 install ftfy` on systems where Python 2 and 3 are both globally
+installed and `pip` refers to Python 2.)
+
+If you're on Python 2.7, you can install an older version:
+
+    pip install 'ftfy<5'
 
 You can also clone this Git repository and install it with
 `python setup.py install`.
@@ -122,11 +136,40 @@ You can also clone this Git repository and install it with
 
 ## Who maintains ftfy?
 
-I'm Rob Speer (rob@luminoso.com).  I develop this tool as part of my
-text-understanding company, [Luminoso](http://luminoso.com), where it has
+I'm Robyn Speer (rspeer@luminoso.com). I develop this tool as part of my
+text-understanding company, [Luminoso](https://luminoso.com), where it has
 proven essential.
 
 Luminoso provides ftfy as free, open source software under the extremely
 permissive MIT license.
 
 You can report bugs regarding ftfy on GitHub and we'll handle them.
+
+
+## Citing ftfy
+
+ftfy has been used as a crucial data processing step in major NLP research.
+
+It's important to give credit appropriately to everyone whose work you build on
+in research. This includes software, not just high-status contributions such as
+mathematical models. All I ask when you use ftfy for research is that you cite
+it.
+
+ftfy has a citable record [on Zenodo](https://zenodo.org/record/2591652).
+A citation of ftfy may look like this:
+
+    Robyn Speer. (2019). ftfy (Version 5.5). Zenodo.
+    http://doi.org/10.5281/zenodo.2591652
+
+In BibTeX format, the citation is::
+
+    @misc{speer-2019-ftfy,
+      author       = {Robyn Speer},
+      title        = {ftfy},
+      note         = {Version 5.5},
+      year         = 2019,
+      howpublished = {Zenodo},
+      doi          = {10.5281/zenodo.2591652},
+      url          = {https://doi.org/10.5281/zenodo.2591652}
+    }
+

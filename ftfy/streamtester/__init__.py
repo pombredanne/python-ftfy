@@ -2,7 +2,6 @@
 This file defines a general method for evaluating ftfy using data that arrives
 in a stream. A concrete implementation of it is found in `twitter_tester.py`.
 """
-from __future__ import print_function, unicode_literals
 from ftfy import fix_text
 from ftfy.fixes import fix_encoding, unescape_html
 from ftfy.chardata import possible_encoding
@@ -32,10 +31,12 @@ class StreamTester:
                 fixed = fix_text(text, uncurl_quotes=False, fix_character_width=False)
             if text != fixed:
                 # possibly filter common bots before printing
-                print(u'\nText:\t{text!r}\nFixed:\t{fixed!r}\n'.format(
+                print('\nText:\t{text!r}\nFixed:\t{fixed!r}\n'.format(
                     text=text, fixed=fixed
                 ))
                 self.num_fixed += 1
+            elif 'â€' in text or '\x80' in text:
+                print('\nNot fixed:\t{text!r}'.format(text=text))
 
         # Print status updates once in a while
         if self.count % 100 == 0:

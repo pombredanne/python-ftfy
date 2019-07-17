@@ -1,24 +1,24 @@
-# -*- coding: utf-8 -*-
 """
 This gives other modules access to the gritty details about characters and the
 encodings that use them.
 """
 
-from __future__ import unicode_literals
 import re
 import zlib
 import unicodedata
+import itertools
 from pkg_resources import resource_string
-from ftfy.compatibility import unichr
 
-# These are the five encodings we will try to fix in ftfy, in the
+# These are the encodings we will try to fix in ftfy, in the
 # order that they should be tried.
 CHARMAP_ENCODINGS = [
     'latin-1',
     'sloppy-windows-1252',
+    'sloppy-windows-1250',
+    'iso-8859-2',
+    'sloppy-windows-1251',
     'macroman',
     'cp437',
-    'sloppy-windows-1251',
 ]
 
 
@@ -36,8 +36,8 @@ def _build_regexes():
         # Make a sequence of characters that bytes \x80 to \xFF decode to
         # in each encoding, as well as byte \x1A, which is used to represent
         # the replacement character � in the sloppy-* encodings.
-        latin1table = ''.join(unichr(i) for i in range(128, 256)) + '\x1a'
-        charlist = latin1table.encode('latin-1').decode(encoding)
+        byte_range = bytes(list(range(0x80, 0x100)) + [0x1a])
+        charlist = byte_range.decode(encoding)
 
         # The rest of the ASCII bytes -- bytes \x00 to \x19 and \x1B
         # to \x7F -- will decode as those ASCII characters in any encoding we
@@ -47,6 +47,8 @@ def _build_regexes():
         regex = '^[\x00-\x19\x1b-\x7f{0}]*$'.format(charlist)
         encoding_regexes[encoding] = re.compile(regex)
     return encoding_regexes
+
+
 ENCODING_REGEXES = _build_regexes()
 
 
@@ -60,20 +62,16 @@ def _build_utf8_punct_regex():
     These are recognizable by the distinctive 'â€' ('\xe2\x80') sequence they
     all begin with when decoded as Windows-1252.
     """
-    # We're making a regex that has all the literal bytes from 0x80 to 0xbf in
-    # a range. "Couldn't this have just said [\x80-\xbf]?", you might ask.
-    # However, when we decode the regex as Windows-1252, the resulting
-    # characters won't even be remotely contiguous.
-    #
-    # Unrelatedly, the expression that generates these bytes will be so much
-    # prettier when we deprecate Python 2.
-    continuation_char_list = ''.join(
-        unichr(i) for i in range(0x80, 0xc0)
-    ).encode('latin-1')
-    obvious_utf8 = ('â€['
-                    + continuation_char_list.decode('sloppy-windows-1252')
+    # We need to recognize the Latin-1 decodings of bytes 0x80 to 0xbf, which
+    # are a contiguous range, as well as the different Windows-1252 decodings
+    # of 0x80 to 0x9f, which are not contiguous at all. (Latin-1 and
+    # Windows-1252 agree on bytes 0xa0 and up.)
+    obvious_utf8 = ('â[€\x80][\x80-\xbf'
+                    + bytes(range(0x80, 0xa0)).decode('sloppy-windows-1252')
                     + ']')
     return re.compile(obvious_utf8)
+
+
 PARTIAL_UTF8_PUNCT_RE = _build_utf8_punct_regex()
 
 
@@ -123,8 +121,12 @@ LOSSY_UTF8_RE = re.compile(
 )
 
 # These regexes match various Unicode variations on single and double quotes.
-SINGLE_QUOTE_RE = re.compile('[\u2018-\u201b]')
+SINGLE_QUOTE_RE = re.compile('[\u02bc\u2018-\u201b]')
 DOUBLE_QUOTE_RE = re.compile('[\u201c-\u201f]')
+
+# This regex matches C1 control characters, which occupy some of the positions
+# in the Latin-1 character map that Windows assigns to other characters instead.
+C1_CONTROL_RE = re.compile(r'[\x80-\x9f]')
 
 
 def possible_encoding(text, encoding):
@@ -142,6 +144,7 @@ CHAR_CLASS_STRING = zlib.decompress(
     resource_string(__name__, 'char_classes.dat')
 ).decode('ascii')
 
+
 def chars_to_classes(string):
     """
     Convert each Unicode character to a letter indicating which of many
@@ -154,36 +157,65 @@ def chars_to_classes(string):
 
 def _build_control_char_mapping():
     """
-    Build a translate mapping that strips all C0 control characters,
-    except those that represent whitespace.
+    Build a translate mapping that strips likely-unintended control characters.
+    See :func:`ftfy.fixes.remove_control_chars` for a description of these
+    codepoint ranges and why they should be removed.
     """
     control_chars = {}
-    for i in range(32):
+
+    for i in itertools.chain(
+            range(0x00, 0x09),
+            [0x0b],
+            range(0x0e, 0x20),
+            [0x7f],
+            range(0x206a, 0x2070),
+            [0xfeff],
+            range(0xfff9, 0xfffd),
+            range(0x1d173, 0x1d17b),
+            range(0xe0000, 0xe0080)
+    ):
         control_chars[i] = None
 
-    # Map whitespace control characters to themselves.
-    for char in '\t\n\f\r':
-        del control_chars[ord(char)]
     return control_chars
+
+
 CONTROL_CHARS = _build_control_char_mapping()
 
 
 # A translate mapping that breaks ligatures made of Latin letters. While
-# ligatures may be important to the representation of other languages, in
-# Latin letters they tend to represent a copy/paste error.
+# ligatures may be important to the representation of other languages, in Latin
+# letters they tend to represent a copy/paste error. It omits ligatures such
+# as æ that are frequently used intentionally.
 #
-# Ligatures may also be separated by NFKC normalization, but that is sometimes
-# more normalization than you want.
+# This list additionally includes some Latin digraphs that represent two
+# characters for legacy encoding reasons, not for typographical reasons.
+#
+# Ligatures and digraphs may also be separated by NFKC normalization, but that
+# is sometimes more normalization than you want.
+
 LIGATURES = {
-    ord('Ĳ'): 'IJ',
+    ord('Ĳ'): 'IJ',   # Dutch ligatures
     ord('ĳ'): 'ij',
-    ord('ﬀ'): 'ff',
+    ord('ŉ'): "ʼn",   # Afrikaans digraph meant to avoid auto-curled quote
+    ord('Ǳ'): 'DZ',   # Serbian/Croatian digraphs for Cyrillic conversion
+    ord('ǲ'): 'Dz',
+    ord('ǳ'): 'dz',
+    ord('Ǆ'): 'DŽ',
+    ord('ǅ'): 'Dž',
+    ord('ǆ'): 'dž',
+    ord('Ǉ'): 'LJ',
+    ord('ǈ'): 'Lj',
+    ord('ǉ'): 'lj',
+    ord('Ǌ'): 'NJ',
+    ord('ǋ'): 'Nj',
+    ord('ǌ'): "nj",
+    ord('ﬀ'): 'ff',   # Latin typographical ligatures
     ord('ﬁ'): 'fi',
     ord('ﬂ'): 'fl',
     ord('ﬃ'): 'ffi',
     ord('ﬄ'): 'ffl',
     ord('ﬅ'): 'ſt',
-    ord('ﬆ'): 'st'
+    ord('ﬆ'): 'st',
 }
 
 
@@ -197,10 +229,11 @@ def _build_width_map():
     # with that in the dictionary.
     width_map = {0x3000: ' '}
     for i in range(0xff01, 0xfff0):
-        char = unichr(i)
+        char = chr(i)
         alternate = unicodedata.normalize('NFKC', char)
         if alternate != char:
             width_map[i] = alternate
     return width_map
-WIDTH_MAP = _build_width_map()
 
+
+WIDTH_MAP = _build_width_map()

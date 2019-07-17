@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 ftfy: fixes text for you
 
@@ -6,21 +5,20 @@ This is a module for making text less broken. See the `fix_text` function
 for more information.
 """
 
-from __future__ import unicode_literals
-
-# See the docstring for ftfy.bad_codecs to see what we're doing here.
+import unicodedata
 import ftfy.bad_codecs
-ftfy.bad_codecs.ok()
-
 from ftfy import fixes
 from ftfy.formatting import display_ljust
-from ftfy.compatibility import is_printable
-import unicodedata
 
-__version__ = '4.1.1'
+__version__ = '5.5.1'
+
+
+# See the docstring for ftfy.bad_codecs to see what we're doing here.
+ftfy.bad_codecs.ok()
 
 
 def fix_text(text,
+             *,
              fix_entities='auto',
              remove_terminal_escapes=True,
              fix_encoding=True,
@@ -52,9 +50,8 @@ def fix_text(text,
         >>> print(fix_text('<em>HTML entities &lt;3</em>'))
         <em>HTML entities &lt;3</em>
 
-        >>> print(fix_text('\001\033[36;44mI&#x92;m blue, da ba dee da ba '
-        ...               'doo&#133;\033[0m', normalization='NFKC'))
-        I'm blue, da ba dee da ba doo...
+        >>> print(fix_text("&macr;\\_(ã\x83\x84)_/&macr;"))
+        ¯\_(ツ)_/¯
 
         >>> # This example string starts with a byte-order mark, even if
         >>> # you can't see it on the Web.
@@ -73,12 +70,6 @@ def fix_text(text,
 
     Based on the options you provide, ftfy applies these steps in order:
 
-    - If `fix_entities` is True, replace HTML entities with their equivalent
-      characters. If it's "auto" (the default), then consider replacing HTML
-      entities, but don't do so in text where you have seen a pair of actual
-      angle brackets (that's probably actually HTML and you shouldn't mess
-      with the entities).
-
     - If `remove_terminal_escapes` is True, remove sequences of bytes that are
       instructions for Unix terminals, such as the codes that make text appear
       in different colors.
@@ -86,6 +77,12 @@ def fix_text(text,
     - If `fix_encoding` is True, look for common mistakes that come from
       encoding or decoding Unicode text incorrectly, and fix them if they are
       reasonably fixable. See `fixes.fix_encoding` for details.
+
+    - If `fix_entities` is True, replace HTML entities with their equivalent
+      characters. If it's "auto" (the default), then consider replacing HTML
+      entities, but don't do so in text where you have seen a pair of actual
+      angle brackets (that's probably actually HTML and you shouldn't mess
+      with the entities).
 
     - If `uncurl_quotes` is True, replace various curly quotation marks with
       plain-ASCII straight quotes.
@@ -106,12 +103,16 @@ def fix_text(text,
       when they're appropriately paired, or replacing them with \ufffd
       otherwise.
 
-    - If `fix_control_characters` is true, remove all C0 control characters
-      except the common useful ones: TAB, CR, LF, and FF. (CR characters
-      may have already been removed by the `fix_line_breaks` step.)
+    - If `remove_control_chars` is true, remove control characters that
+      are not suitable for use in text. This includes most of the ASCII control
+      characters, plus some Unicode controls such as the byte order mark
+      (U+FEFF). Useful control characters, such as Tab, Line Feed, and
+      bidirectional marks, are left as they are.
 
-    - If `remove_bom` is True, remove the Byte-Order Mark if it exists.
-      (This is a decoded Unicode string. It doesn't have a "byte order".)
+    - If `remove_bom` is True, remove the Byte-Order Mark at the start of the
+      string if it exists. (This is largely redundant, because it's a special
+      case of `remove_control_characters`. This option will become deprecated
+      in a later version.)
 
     - If `normalization` is not None, apply the specified form of Unicode
       normalization, which can be one of 'NFC', 'NFKC', 'NFD', and 'NFKD'.
@@ -184,6 +185,7 @@ def fix_text(text,
 
     return ''.join(out)
 
+
 # Some alternate names for the main functions
 ftfy = fix_text
 fix_encoding = fixes.fix_encoding
@@ -192,6 +194,7 @@ fix_text_encoding = fixes.fix_text_encoding  # deprecated
 
 def fix_file(input_file,
              encoding=None,
+             *,
              fix_entities='auto',
              remove_terminal_escapes=True,
              fix_encoding=True,
@@ -239,6 +242,7 @@ def fix_file(input_file,
 
 
 def fix_text_segment(text,
+                     *,
                      fix_entities='auto',
                      remove_terminal_escapes=True,
                      fix_encoding=True,
@@ -264,12 +268,12 @@ def fix_text_segment(text,
         fix_entities = False
     while True:
         origtext = text
-        if fix_entities:
-            text = fixes.unescape_html(text)
         if remove_terminal_escapes:
             text = fixes.remove_terminal_escapes(text)
         if fix_encoding:
             text = fixes.fix_encoding(text)
+        if fix_entities:
+            text = fixes.unescape_html(text)
         if fix_latin_ligatures:
             text = fixes.fix_latin_ligatures(text)
         if fix_character_width:
@@ -282,7 +286,9 @@ def fix_text_segment(text,
             text = fixes.fix_surrogates(text)
         if remove_control_chars:
             text = fixes.remove_control_chars(text)
-        if remove_bom:
+        if remove_bom and not remove_control_chars:
+            # Skip this step if we've already done `remove_control_chars`,
+            # because it would be redundant.
             text = fixes.remove_bom(text)
         if normalization is not None:
             text = unicodedata.normalize(normalization, text)
@@ -325,7 +331,7 @@ def guess_bytes(bstring):
     - "sloppy-windows-1252", the Latin-1-like encoding that is the most common
       single-byte encoding
     """
-    if type(bstring) == type(''):
+    if isinstance(bstring, str):
         raise UnicodeError(
             "This string was already decoded as Unicode. You should pass "
             "bytes to guess_bytes, not Unicode."
@@ -334,11 +340,9 @@ def guess_bytes(bstring):
     if bstring.startswith(b'\xfe\xff') or bstring.startswith(b'\xff\xfe'):
         return bstring.decode('utf-16'), 'utf-16'
 
-    byteset = set(bytes(bstring))
-    byte_ed, byte_c0, byte_CR, byte_LF = b'\xed\xc0\r\n'
-
+    byteset = set(bstring)
     try:
-        if byte_ed in byteset or byte_c0 in byteset:
+        if 0xed in byteset or 0xc0 in byteset:
             # Byte 0xed can be used to encode a range of codepoints that
             # are UTF-16 surrogates. UTF-8 does not use UTF-16 surrogates,
             # so when we see 0xed, it's very likely we're being asked to
@@ -365,7 +369,8 @@ def guess_bytes(bstring):
     except UnicodeDecodeError:
         pass
 
-    if byte_CR in bstring and byte_LF not in bstring:
+    if 0x0d in byteset and 0x0a not in byteset:
+        # Files that contain CR and not LF are likely to be MacRoman.
         return bstring.decode('macroman'), 'macroman'
     else:
         return bstring.decode('sloppy-windows-1252'), 'sloppy-windows-1252'
@@ -394,7 +399,7 @@ def explain_unicode(text):
         U+253B  ┻       [So] BOX DRAWINGS HEAVY UP AND HORIZONTAL
     """
     for char in text:
-        if is_printable(char):
+        if char.isprintable():
             display = char
         else:
             display = char.encode('unicode-escape').decode('ascii')

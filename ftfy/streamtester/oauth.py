@@ -1,13 +1,12 @@
-# coding: utf-8
 """
 Do what is necessary to authenticate this tester as a Twitter "app", using
 somebody's Twitter account.
 """
-from __future__ import unicode_literals
 import os
 
 
 AUTH_TOKEN_PATH = os.path.expanduser('~/.cache/oauth/twitter_ftfy.auth')
+
 
 def get_auth():
     """
@@ -70,4 +69,3 @@ def get_auth():
         consumer_key=consumer_key,
         consumer_secret=unhide(fig_leaf)
     )
-
